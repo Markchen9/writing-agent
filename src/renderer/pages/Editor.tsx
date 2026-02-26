@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Topic, Config, CreationConstitution } from '../App'
+import FloatingBall from './FloatingBall'
 
 interface EditorProps {
   topic: Topic
@@ -11,23 +12,14 @@ interface EditorProps {
   constitutions: CreationConstitution[]
 }
 
-interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-}
-
 function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorProps) {
   const [content, setContent] = useState(topic.content)
   const [showPreview, setShowPreview] = useState(true)
-  const [showAI, setShowAI] = useState(true) // AI 助手默认展开
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [input, setInput] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
+  const [isPolishing, setIsPolishing] = useState(false) // 润色加载状态
   const [selection, setSelection] = useState('')
   const [selectionRange, setSelectionRange] = useState<{ start: number, end: number } | null>(null)
   const [showPolishMenu, setShowPolishMenu] = useState(false)
   const [polishPosition, setPolishPosition] = useState({ x: 0, y: 0 })
-  const chatEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // 创作提示词相关状态
@@ -63,10 +55,11 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     return () => clearTimeout(timer)
   }, [content])
 
-  // Auto-scroll chat
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  // 清除选中状态的回调（给 FloatingBall 用）
+  const clearSelection = () => {
+    setSelection('')
+    setSelectionRange(null)
+  }
 
   // 构建创作提示词的 system prompt
   const buildConstitutionPrompt = () => {
@@ -145,7 +138,7 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
   const handlePolish = async (type: 'rewrite' | 'formal' | 'casual' | 'fix') => {
     if (!selection) return
     setShowPolishMenu(false)
-    setIsLoading(true)
+    setIsPolishing(true)
 
     const constitutionPrompt = buildConstitutionPrompt()
     const promptMap: Record<string, string> = {
@@ -169,12 +162,12 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     } catch (error) {
       alert('润色失败')
     }
-    setIsLoading(false)
+    setIsPolishing(false)
   }
 
   const handlePolishAll = async (type: 'rewrite' | 'formal' | 'casual' | 'fix') => {
     if (!content) return
-    setIsLoading(true)
+    setIsPolishing(true)
 
     const constitutionPrompt = buildConstitutionPrompt()
     const promptMap: Record<string, string> = {
@@ -197,156 +190,9 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     } catch (error) {
       alert('润色失败')
     }
-    setIsLoading(false)
+    setIsPolishing(false)
   }
 
-  const handleGenerateDraft = async () => {
-    if (messages.length === 0) {
-      alert('请先和 AI 助手讨论文章需求')
-      return
-    }
-
-    setIsLoading(true)
-
-    // 构建 Prompt：聊天历史 + 创作提示词 + 选题描述
-    const constitutionPrompt = buildConstitutionPrompt()
-
-    // 提取聊天历史
-    const conversationHistory = messages.map(msg =>
-      `${msg.role === 'user' ? '用户' : 'AI'}: ${msg.content}`
-    ).join('\n')
-
-    const fullPrompt = `你是一个写作助手，正在帮助用户创作文章。
-
-【选题名称】${topic.title}
-${topic.description ? '【选题描述】' + topic.description : ''}
-
-${constitutionPrompt}
-
-【对话历史】
-${conversationHistory}
-
----
-
-请根据以上对话历史和创作要求，为用户生成一篇完整的文章初稿。直接输出文章内容，不需要解释。
-`
-
-    try {
-      const response = await window.electronAPI.callLLM([
-        { role: 'user', content: fullPrompt }
-      ])
-
-      if (response.success && response.content) {
-        setContent(response.content)
-        // 生成成功后，清空聊天记录，方便后续修改
-        setMessages([])
-      } else {
-        alert(`生成失败：${response.error}`)
-      }
-    } catch (error) {
-      alert('生成失败')
-    }
-    setIsLoading(false)
-  }
-
-  const handleSendMessage = async () => {
-    if (!input.trim()) return
-
-    const userMessage = input
-    setInput('')
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }])
-    setIsLoading(true)
-
-    // 构建带创作提示词的 context
-    const constitutionPrompt = buildConstitutionPrompt()
-
-    // 如果有选中内容，只修改选中的部分
-    if (selection && selectionRange) {
-      // 局部修改模式
-      const beforeText = content.slice(0, selectionRange.start)
-      const afterText = content.slice(selectionRange.end)
-      const beforeContext = content.slice(Math.max(0, selectionRange.start - 300), selectionRange.start)
-      const afterContext = content.slice(selectionRange.end, Math.min(content.length, selectionRange.end + 300))
-
-      const modifyPrompt = `你是一个写作助手，正在帮助用户修改文章中的选中内容。
-
-【选题名称】${topic.title}
-${constitutionPrompt}
-
-【当前选中内容】
-${selection}
-
-【选中内容的前文】（仅供参考上下文）
-${beforeContext || '（无）'}
-
-【选中内容的后文】（仅供参考上下文）
-${afterContext || '（无）'}
-
-【用户修改要求】
-${userMessage}
-
----
-
-请根据用户的要求修改选中内容。只输出修改后的选中内容，不需要解释，不要包含其他文字。
-`
-
-      try {
-        const response = await window.electronAPI.callLLM([
-          { role: 'user', content: modifyPrompt }
-        ])
-
-        if (response.success && response.content) {
-          // 将修改后的内容替换到编辑区
-          const newContent = beforeText + response.content + afterText
-          setContent(newContent)
-          // 清空选中状态
-          setSelection('')
-          setSelectionRange(null)
-          // 添加 AI 回复到聊天记录
-          setMessages(prev => [...prev, { role: 'assistant', content: `已修改选中内容：\n\n${response.content}` }])
-        } else {
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: `修改失败：${response.error}`
-          }])
-        }
-      } catch (error) {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: '抱歉，修改失败'
-        }])
-      }
-    } else {
-      // 普通聊天模式
-      const contextMessages = [
-        {
-          role: 'system',
-          content: `你是一个写作助手，正在帮助用户创作一篇名为"${topic.title}"的文章。\n\n${constitutionPrompt}\n\n当前文章内容：\n\n${content.slice(0, 2000)}`
-        },
-        ...messages,
-        { role: 'user', content: userMessage }
-      ]
-
-      try {
-        const response = await window.electronAPI.callLLM(contextMessages)
-
-        if (response.success && response.content) {
-          setMessages(prev => [...prev, { role: 'assistant', content: response.content! }])
-        } else {
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: `调用失败：${response.error}`
-          }])
-        }
-      } catch (error) {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: '抱歉，请先在设置中配置 LLM API'
-        }])
-      }
-    }
-    setIsLoading(false)
-  }
 
   const handleExport = async () => {
     const result = await window.electronAPI.exportMarkdown(content, topic.title)
@@ -383,14 +229,8 @@ ${userMessage}
           >
             {showPreview ? '隐藏预览' : '显示预览'}
           </button>
-          <button
-            className={`secondary ${showAI ? 'active' : ''}`}
-            onClick={() => setShowAI(!showAI)}
-          >
-            {showAI ? '隐藏 AI 助手' : 'AI 助手'}
-          </button>
-          <button className="secondary" onClick={() => handlePolishAll('rewrite')}>
-            全文润色
+          <button className="secondary" onClick={() => handlePolishAll('rewrite')} disabled={isPolishing}>
+            {isPolishing ? '润色中...' : '全文润色'}
           </button>
           <button className="primary" onClick={handleExport}>导出</button>
         </div>
@@ -422,69 +262,18 @@ ${userMessage}
           </div>
         )}
 
-        {/* AI Chat Panel */}
-        {showAI && (
-          <div className="ai-panel">
-            <div className="ai-header">
-              <h3>AI 助手</h3>
-              {!config?.llm.apiKey && (
-                <span className="warning">请先在设置中配置 API Key</span>
-              )}
-            </div>
-            <div className="chat-messages">
-              {messages.length === 0 ? (
-                <div className="chat-empty">
-                  <p>你好！我是 AI 写作助手，可以帮你：</p>
-                  <ul>
-                    <li>续写文章</li>
-                    <li>提供写作建议</li>
-                    <li>回答写作问题</li>
-                  </ul>
-                </div>
-              ) : (
-                messages.map((msg, i) => (
-                  <div key={i} className={`chat-message ${msg.role}`}>
-                    <div className="message-content">{msg.content}</div>
-                  </div>
-                ))
-              )}
-              {isLoading && (
-                <div className="chat-message assistant">
-                  <div className="message-content loading">思考中...</div>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-            <div className="chat-input">
-              {/* 选中内容提示条 */}
-              {selection && (
-                <div className="selection-notice">
-                  <span>已选中 {selection.length} 字，输入修改要求...</span>
-                  <button onClick={() => { setSelection(''); setSelectionRange(null); }}>取消</button>
-                </div>
-              )}
-              <button
-                className="secondary"
-                onClick={handleGenerateDraft}
-                disabled={isLoading}
-                style={{ width: '100%', marginBottom: '8px' }}
-              >
-                📝 生成初稿
-              </button>
-              <input
-                type="text"
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                placeholder="输入问题..."
-                disabled={isLoading}
-              />
-              <button className="primary" onClick={handleSendMessage} disabled={isLoading}>
-                发送
-              </button>
-            </div>
-          </div>
-        )}
+        {/* AI 悬浮球 */}
+        <FloatingBall
+          config={config}
+          constitutions={constitutions}
+          topic={topic}
+          content={content}
+          onContentChange={setContent}
+          selection={selection}
+          selectionRange={selectionRange}
+          onClearSelection={clearSelection}
+          buildConstitutionPrompt={buildConstitutionPrompt}
+        />
 
         {/* 创作提示词面板 */}
         {showConstitutionPanel && (
@@ -706,117 +495,7 @@ ${userMessage}
           color: var(--text-secondary);
         }
 
-        .ai-panel {
-          width: 320px;
-          display: flex;
-          flex-direction: column;
-          border-left: 1px solid var(--border-color);
-          background: white;
-        }
 
-        .ai-header {
-          padding: 16px;
-          border-bottom: 1px solid var(--border-color);
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .ai-header h3 {
-          font-size: 14px;
-          font-weight: 600;
-        }
-
-        .ai-header .warning {
-          font-size: 11px;
-          color: var(--warning-color);
-        }
-
-        .chat-messages {
-          flex: 1;
-          overflow-y: auto;
-          padding: 16px;
-        }
-
-        .chat-empty {
-          color: var(--text-secondary);
-          font-size: 14px;
-        }
-
-        .chat-empty ul {
-          margin-top: 12px;
-          padding-left: 20px;
-        }
-
-        .chat-message {
-          margin-bottom: 12px;
-        }
-
-        .chat-message.user {
-          text-align: right;
-        }
-
-        .chat-message .message-content {
-          display: inline-block;
-          padding: 10px 14px;
-          border-radius: 12px;
-          font-size: 14px;
-          max-width: 90%;
-          text-align: left;
-        }
-
-        .chat-message.user .message-content {
-          background: var(--primary-color);
-          color: white;
-        }
-
-        .chat-message.assistant .message-content {
-          background: var(--sidebar-bg);
-        }
-
-        .chat-message .loading {
-          color: var(--text-secondary);
-          font-style: italic;
-        }
-
-        .chat-input {
-          padding: 16px;
-          border-top: 1px solid var(--border-color);
-          display: flex;
-          gap: 8px;
-        }
-
-        .chat-input input {
-          flex: 1;
-        }
-
-        /* 选中内容提示条 */
-        .selection-notice {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 8px 12px;
-          background: rgba(37, 99, 235, 0.1);
-          border: 1px solid var(--primary-color);
-          border-radius: 6px;
-          margin-bottom: 8px;
-          font-size: 13px;
-          width: 100%;
-        }
-
-        .selection-notice button {
-          background: transparent;
-          border: none;
-          color: var(--primary-color);
-          cursor: pointer;
-          font-size: 12px;
-          padding: 2px 8px;
-          border-radius: 4px;
-        }
-
-        .selection-notice button:hover {
-          background: rgba(37, 99, 235, 0.1);
-        }
 
         .polish-menu {
           position: fixed;
