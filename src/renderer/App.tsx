@@ -27,6 +27,7 @@ export type Topic = {
   order?: number  // 同一列内的排序顺序
   constitutionId: string | null  // 关联的创作宪法 ID，null 表示不启用
   temporaryAdjustments: string    // 临时调整的规则（只对当前文档生效）
+  chatHistory: { role: 'user' | 'assistant', content: string }[]  // AI 聊天记录
 }
 
 export type Config = {

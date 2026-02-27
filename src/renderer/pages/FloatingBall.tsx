@@ -17,18 +17,35 @@ interface FloatingBallProps {
   selectionRange: { start: number, end: number } | null
   onClearSelection: () => void            // 清除选中状态
   buildConstitutionPrompt: () => string   // 构建创作提示词
+  initialChatHistory?: { role: 'user' | 'assistant', content: string }[]  // 初始聊天记录
+  onChatHistoryChange?: (history: { role: 'user' | 'assistant', content: string }[]) => void  // 聊天记录变化回调
 }
 
 function FloatingBall({
   config, constitutions, topic, content, onContentChange,
-  selection, selectionRange, onClearSelection, buildConstitutionPrompt
+  selection, selectionRange, onClearSelection, buildConstitutionPrompt,
+  initialChatHistory, onChatHistoryChange
 }: FloatingBallProps) {
   // 面板展开/收起
   const [expanded, setExpanded] = useState(true) // 默认展开
   // 聊天相关状态
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>(initialChatHistory || [])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+
+  // 聊天记录持久化：当 messages 变化时，保存到 topic
+  useEffect(() => {
+    if (onChatHistoryChange && messages.length > 0) {
+      onChatHistoryChange(messages)
+    }
+  }, [messages])
+
+  // 加载初始聊天记录
+  useEffect(() => {
+    if (initialChatHistory) {
+      setMessages(initialChatHistory)
+    }
+  }, [initialChatHistory])
   // 未读消息红点
   const [hasUnread, setHasUnread] = useState(false)
   // 拖拽相关状态

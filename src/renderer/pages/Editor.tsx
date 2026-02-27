@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Topic, Config, CreationConstitution } from '../App'
 import FloatingBall from './FloatingBall'
+import DiffPreview from './DiffPreview'
 
 interface EditorProps {
   topic: Topic
@@ -16,6 +17,9 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
   const [content, setContent] = useState(topic.content)
   const [showPreview, setShowPreview] = useState(true)
   const [isPolishing, setIsPolishing] = useState(false) // 润色加载状态
+  const [pendingPolish, setPendingPolish] = useState<{
+    original: string, modified: string, isFullText: boolean
+  } | null>(null) // 待确认的润色结果
   const [selection, setSelection] = useState('')
   const [selectionRange, setSelectionRange] = useState<{ start: number, end: number } | null>(null)
   const [showPolishMenu, setShowPolishMenu] = useState(false)
@@ -154,8 +158,12 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
       ])
 
       if (response.success && response.content) {
-        const newContent = content.replace(selection, response.content)
-        setContent(newContent)
+        // 不直接替换，先弹出预览
+        setPendingPolish({
+          original: selection,
+          modified: response.content,
+          isFullText: false
+        })
       } else {
         alert(`润色失败：${response.error}`)
       }
@@ -183,7 +191,12 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
       ])
 
       if (response.success && response.content) {
-        setContent(response.content)
+        // 不直接替换，先弹出预览
+        setPendingPolish({
+          original: content,
+          modified: response.content,
+          isFullText: true
+        })
       } else {
         alert(`润色失败：${response.error}`)
       }
@@ -191,6 +204,25 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
       alert('润色失败')
     }
     setIsPolishing(false)
+  }
+
+  // 用户确认应用润色结果
+  const acceptPolish = () => {
+    if (!pendingPolish) return
+    if (pendingPolish.isFullText) {
+      // 全文润色：直接替换整篇内容
+      setContent(pendingPolish.modified)
+    } else {
+      // 选中润色：替换选中部分
+      const newContent = content.replace(pendingPolish.original, pendingPolish.modified)
+      setContent(newContent)
+    }
+    setPendingPolish(null)
+  }
+
+  // 用户放弃润色结果
+  const rejectPolish = () => {
+    setPendingPolish(null)
   }
 
 
@@ -273,6 +305,13 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
           selectionRange={selectionRange}
           onClearSelection={clearSelection}
           buildConstitutionPrompt={buildConstitutionPrompt}
+          initialChatHistory={topic.chatHistory || []}
+          onChatHistoryChange={(history) => {
+            onUpdateTopic({
+              ...topic,
+              chatHistory: history
+            })
+          }}
         />
 
         {/* 创作提示词面板 */}
@@ -366,6 +405,16 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
           <button onClick={() => handlePolish('casual')}>轻松语气</button>
           <button onClick={() => handlePolish('fix')}>纠错</button>
         </div>
+      )}
+
+      {/* 润色结果预览弹窗 */}
+      {pendingPolish && (
+        <DiffPreview
+          originalText={pendingPolish.original}
+          modifiedText={pendingPolish.modified}
+          onAccept={acceptPolish}
+          onReject={rejectPolish}
+        />
       )}
 
       <style>{`
