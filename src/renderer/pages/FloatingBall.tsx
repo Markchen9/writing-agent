@@ -32,9 +32,11 @@ function FloatingBall({
   // 未读消息红点
   const [hasUnread, setHasUnread] = useState(false)
   // 拖拽相关状态
-  const [position, setPosition] = useState({ x: 0, y: 0 })
+  const [position, setPosition] = useState({ x: 0, y: 0 })         // 浮球位置
+  const [panelPos, setPanelPos] = useState<{ x: number, y: number } | null>(null)  // 面板拖拽位置
   const [isDragging, setIsDragging] = useState(false)
   const dragStartRef = useRef({ x: 0, y: 0, posX: 0, posY: 0 })
+  const dragTargetRef = useRef<'ball' | 'panel'>('ball')  // 当前拖拽的是浮球还是面板
   const hasDraggedRef = useRef(false)  // 区分拖拽和点击
   const ballRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
@@ -52,12 +54,11 @@ function FloatingBall({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // ========== 拖拽逻辑 ==========
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    // 只在浮球上拖拽（展开面板时不拖拽）
-    if (expanded) return
+  // ========== 拖拽逻辑（浮球） ==========
+  const handleBallMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     setIsDragging(true)
+    dragTargetRef.current = 'ball'
     hasDraggedRef.current = false
     dragStartRef.current = {
       x: e.clientX,
@@ -65,7 +66,25 @@ function FloatingBall({
       posX: position.x,
       posY: position.y
     }
-  }, [expanded, position])
+  }, [position])
+
+  // ========== 拖拽逻辑（面板头部） ==========
+  const handlePanelMouseDown = useCallback((e: React.MouseEvent) => {
+    // 如果点击的是按钮等交互元素，不拖拽
+    if ((e.target as HTMLElement).closest('button')) return
+    e.preventDefault()
+    setIsDragging(true)
+    dragTargetRef.current = 'panel'
+    hasDraggedRef.current = false
+    // 获取面板当前实际位置
+    const currentPanel = panelPos || calcPanelPos()
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      posX: currentPanel.x,
+      posY: currentPanel.y
+    }
+  }, [panelPos, position])
 
   useEffect(() => {
     if (!isDragging) return
@@ -77,10 +96,19 @@ function FloatingBall({
       if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
         hasDraggedRef.current = true
       }
-      // 限制在窗口内
-      const newX = Math.max(0, Math.min(window.innerWidth - 56, dragStartRef.current.posX + dx))
-      const newY = Math.max(0, Math.min(window.innerHeight - 56, dragStartRef.current.posY + dy))
-      setPosition({ x: newX, y: newY })
+
+      if (dragTargetRef.current === 'ball') {
+        // 拖拽浮球
+        const newX = Math.max(0, Math.min(window.innerWidth - 56, dragStartRef.current.posX + dx))
+        const newY = Math.max(0, Math.min(window.innerHeight - 56, dragStartRef.current.posY + dy))
+        setPosition({ x: newX, y: newY })
+      } else {
+        // 拖拽面板
+        const panelW = 360, panelH = 500
+        const newX = Math.max(0, Math.min(window.innerWidth - panelW, dragStartRef.current.posX + dx))
+        const newY = Math.max(0, Math.min(window.innerHeight - panelH, dragStartRef.current.posY + dy))
+        setPanelPos({ x: newX, y: newY })
+      }
     }
 
     const handleMouseUp = () => {
@@ -224,20 +252,22 @@ ${userMessage}
     setIsLoading(false)
   }
 
-  // ========== 计算面板位置（基于浮球位置） ==========
-  const getPanelStyle = () => {
+  // ========== 计算面板默认位置（基于浮球位置） ==========
+  const calcPanelPos = () => {
     const panelWidth = 360
     const panelHeight = 500
-    // 面板默认在浮球左上方展开
     let left = position.x - panelWidth + 56
     let top = position.y - panelHeight
-
-    // 边界修正
     if (left < 8) left = 8
     if (top < 8) top = 8
     if (left + panelWidth > window.innerWidth - 8) left = window.innerWidth - panelWidth - 8
+    return { x: left, y: top }
+  }
 
-    return { left, top, width: panelWidth, height: panelHeight }
+  // 如果面板被拖拽过，使用拖拽位置；否则根据浮球位置计算
+  const getPanelStyle = () => {
+    const pos = panelPos || calcPanelPos()
+    return { left: pos.x, top: pos.y, width: 360, height: 500 }
   }
 
   return (
@@ -252,7 +282,7 @@ ${userMessage}
             top: position.y,
             cursor: isDragging ? 'grabbing' : 'grab'
           }}
-          onMouseDown={handleMouseDown}
+          onMouseDown={handleBallMouseDown}
           onClick={handleBallClick}
         >
           <span className="ball-icon">🤖</span>
@@ -263,8 +293,12 @@ ${userMessage}
       {/* 展开面板 */}
       {expanded && (
         <div className="floating-panel" style={getPanelStyle()}>
-          {/* 面板头部 */}
-          <div className="fp-header">
+          {/* 面板头部（可拖拽） */}
+          <div
+            className="fp-header"
+            onMouseDown={handlePanelMouseDown}
+            style={{ cursor: isDragging && dragTargetRef.current === 'panel' ? 'grabbing' : 'grab' }}
+          >
             <h3>AI 助手</h3>
             <div className="fp-header-actions">
               {!config?.llm.apiKey && (
@@ -398,7 +432,7 @@ ${userMessage}
           }
         }
 
-        /* 面板头部 */
+        /* 面板头部（可拖拽） */
         .fp-header {
           display: flex;
           justify-content: space-between;
@@ -407,6 +441,7 @@ ${userMessage}
           border-bottom: 1px solid var(--border-color);
           background: linear-gradient(135deg, #2563eb, #7c3aed);
           color: white;
+          user-select: none;
         }
 
         .fp-header h3 {

@@ -10,7 +10,7 @@
 - **一句话描述**：服务于内容创作者的 AI 写作工具，支持选题管理、Markdown 创作、AI 辅助写作
 - **技术栈**：Electron + React 19 + TypeScript + Vite
 - **包管理器**：npm
-- **Node 版本**：待确认
+- **Node 版本**：v24
 - **项目结构**：
   ```
   src/
