@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Topic, Config, CreationConstitution } from '../App'
@@ -15,10 +15,7 @@ interface EditorProps {
 
 function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorProps) {
   type StartMode = 'direct' | 'chat'
-  const MAX_AI_HISTORY_STEPS = 50
   const [content, setContent] = useState(topic.content)
-  const [showPreview, setShowPreview] = useState(true)
-  const [isPolishing, setIsPolishing] = useState(false) // 润色加载状态
   const [startMode, setStartMode] = useState<StartMode | null>(() => {
     if (topic.content.trim() || (topic.chatHistory?.length || 0) > 0) {
       return 'chat'
@@ -34,12 +31,9 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
   const [selectionRange, setSelectionRange] = useState<{ start: number, end: number } | null>(null)
   const [showPolishMenu, setShowPolishMenu] = useState(false)
   const [polishPosition, setPolishPosition] = useState({ x: 0, y: 0 })
-  const [aiEditHistory, setAiEditHistory] = useState(() => ({
-    undoStack: topic.aiEditHistory?.undoStack || [],
-    redoStack: topic.aiEditHistory?.redoStack || [],
-    maxSteps: topic.aiEditHistory?.maxSteps || MAX_AI_HISTORY_STEPS
-  }))
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
+  const [isInlineEditing, setIsInlineEditing] = useState(false)
+  const editorRef = useRef<HTMLDivElement>(null)
 
   // 创作提示词相关状态
   const [selectedConstitutionId, setSelectedConstitutionId] = useState<string | null>(
@@ -59,87 +53,35 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     } else {
       setStartMode(null)
     }
-    setAiEditHistory({
-      undoStack: topic.aiEditHistory?.undoStack || [],
-      redoStack: topic.aiEditHistory?.redoStack || [],
-      maxSteps: topic.aiEditHistory?.maxSteps || MAX_AI_HISTORY_STEPS
-    })
   }, [topic.id])
 
-  // 记录 AI 改动（入撤销栈，清空重做栈）
+  useEffect(() => {
+    if (!isInlineEditing || !editorRef.current) return
+    const el = editorRef.current
+    el.focus()
+    const sel = window.getSelection()
+    if (!sel) return
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    range.collapse(false)
+    sel.removeAllRanges()
+    sel.addRange(range)
+  }, [isInlineEditing])
+
+  // 应用 AI 内容改动
   const applyAiContentChange = (nextContent: string) => {
     if (nextContent === content) return
-    setAiEditHistory(prev => ({
-      undoStack: [...prev.undoStack, content].slice(-MAX_AI_HISTORY_STEPS),
-      redoStack: [],
-      maxSteps: MAX_AI_HISTORY_STEPS
-    }))
     setContent(nextContent)
   }
-
-  // 撤销 AI 改动
-  const handleUndoAiEdit = () => {
-    if (aiEditHistory.undoStack.length === 0) return
-    const previousContent = aiEditHistory.undoStack[aiEditHistory.undoStack.length - 1]
-    const nextUndoStack = aiEditHistory.undoStack.slice(0, -1)
-    const nextRedoStack = [...aiEditHistory.redoStack, content].slice(-MAX_AI_HISTORY_STEPS)
-
-    setAiEditHistory({
-      undoStack: nextUndoStack,
-      redoStack: nextRedoStack,
-      maxSteps: MAX_AI_HISTORY_STEPS
-    })
-    setContent(previousContent)
-  }
-
-  // 重做 AI 改动
-  const handleRedoAiEdit = () => {
-    if (aiEditHistory.redoStack.length === 0) return
-    const nextContent = aiEditHistory.redoStack[aiEditHistory.redoStack.length - 1]
-    const nextRedoStack = aiEditHistory.redoStack.slice(0, -1)
-    const nextUndoStack = [...aiEditHistory.undoStack, content].slice(-MAX_AI_HISTORY_STEPS)
-
-    setAiEditHistory({
-      undoStack: nextUndoStack,
-      redoStack: nextRedoStack,
-      maxSteps: MAX_AI_HISTORY_STEPS
-    })
-    setContent(nextContent)
-  }
-
-  // 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Y 或 Ctrl/Cmd+Shift+Z 重做
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const isCtrlOrCmd = event.ctrlKey || event.metaKey
-      if (!isCtrlOrCmd) return
-
-      const key = event.key.toLowerCase()
-      const shouldRedoByY = key === 'y'
-      const shouldRedoByShiftZ = key === 'z' && event.shiftKey
-      const shouldUndo = key === 'z' && !event.shiftKey
-
-      if (shouldUndo && aiEditHistory.undoStack.length > 0) {
-        event.preventDefault()
-        handleUndoAiEdit()
-      } else if ((shouldRedoByY || shouldRedoByShiftZ) && aiEditHistory.redoStack.length > 0) {
-        event.preventDefault()
-        handleRedoAiEdit()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [aiEditHistory, content])
 
   // 保存提示词选择到 topic
   useEffect(() => {
     onUpdateTopic({
       ...topic,
       constitutionId: selectedConstitutionId,
-      temporaryAdjustments: temporaryAdjustments,
-      aiEditHistory
+      temporaryAdjustments: temporaryAdjustments
     })
-  }, [selectedConstitutionId, temporaryAdjustments, aiEditHistory])
+  }, [selectedConstitutionId, temporaryAdjustments])
 
   // Auto-save
   useEffect(() => {
@@ -148,13 +90,12 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
         onUpdateTopic({
           ...topic,
           content,
-          updatedAt: new Date().toISOString(),
-          aiEditHistory
+          updatedAt: new Date().toISOString()
         })
       }
     }, 1000)
     return () => clearTimeout(timer)
-  }, [content, aiEditHistory])
+  }, [content])
 
   // 清除选中状态的回调（给 FloatingBall 用）
   const clearSelection = () => {
@@ -222,18 +163,33 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     return labels[perspective] || perspective
   }
 
-  const handleTextSelect = () => {
-    const textarea = textareaRef.current
-    if (!textarea) return
+  const getSelectionOffsets = (container: HTMLElement) => {
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0) return null
+    const range = sel.getRangeAt(0)
+    if (!container.contains(range.commonAncestorContainer)) return null
 
-    const selected = window.getSelection()?.toString()
-    if (selected && selected.trim()) {
-      setSelection(selected)
-      // 记录选中位置的索引
-      setSelectionRange({
-        start: textarea.selectionStart,
-        end: textarea.selectionEnd
-      })
+    const preRange = range.cloneRange()
+    preRange.selectNodeContents(container)
+    preRange.setEnd(range.startContainer, range.startOffset)
+    const start = preRange.toString().length
+    const selectedText = range.toString()
+
+    return {
+      start,
+      end: start + selectedText.length,
+      selectedText
+    }
+  }
+
+  const handleTextSelect = () => {
+    const editor = editorRef.current
+    if (!editor || !isInlineEditing) return
+
+    const offsets = getSelectionOffsets(editor)
+    if (offsets && offsets.selectedText.trim()) {
+      setSelection(offsets.selectedText)
+      setSelectionRange({ start: offsets.start, end: offsets.end })
       const rect = window.getSelection()?.getRangeAt(0).getBoundingClientRect()
       if (rect) {
         setPolishPosition({ x: rect.left + rect.width / 2, y: rect.top - 10 })
@@ -249,7 +205,6 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
   const handlePolish = async (type: 'rewrite' | 'formal' | 'casual' | 'fix') => {
     if (!selection) return
     setShowPolishMenu(false)
-    setIsPolishing(true)
 
     const constitutionPrompt = buildConstitutionPrompt()
     const promptMap: Record<string, string> = {
@@ -278,44 +233,8 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     } catch (error) {
       alert('润色失败')
     }
-    setIsPolishing(false)
   }
 
-  const handlePolishAll = async (type: 'rewrite' | 'formal' | 'casual' | 'fix') => {
-    if (!content) return
-    setIsPolishing(true)
-
-    const constitutionPrompt = buildConstitutionPrompt()
-    const promptMap: Record<string, string> = {
-      rewrite: `${constitutionPrompt}\n\n请改写以下文章，使其更加流畅：\n\n${content}`,
-      formal: `${constitutionPrompt}\n\n请将以下文章改写为正式语气：\n\n${content}`,
-      casual: `${constitutionPrompt}\n\n请将以下文章改写为轻松活泼的语气：\n\n${content}`,
-      fix: `${constitutionPrompt}\n\n请检查并纠正以下文章的语法错误和错别字：\n\n${content}`
-    }
-
-    try {
-      const response = await window.electronAPI.callLLM([
-        { role: 'user', content: promptMap[type] }
-      ])
-
-      if (response.success && response.content) {
-        // 不直接替换，先弹出预览
-        setPendingPolish({
-          original: content,
-          modified: response.content,
-          isFullText: true,
-          range: null
-        })
-      } else {
-        alert(`润色失败：${response.error}`)
-      }
-    } catch (error) {
-      alert('润色失败')
-    }
-    setIsPolishing(false)
-  }
-
-  // 用户确认应用润色结果
   const acceptPolish = () => {
     if (!pendingPolish) return
     if (pendingPolish.isFullText) {
@@ -392,12 +311,13 @@ ${extraIntent}
 
   return (
     <div className="editor-container">
-      {/* Toolbar */}
-      <div className="editor-toolbar">
-        <div className="toolbar-left">
+      {/* Header */}
+      <div className="editor-header">
+        <div className="header-left">
           <button className="secondary" onClick={onBack}>← 返回</button>
-          <span className="topic-title">{topic.title}</span>
-          {/* 创作提示词徽章 */}
+          <span className="header-title">{topic.title}</span>
+        </div>
+        <div className="header-right">
           {constitutions.length > 0 && (
             <button
               className={`constitution-badge ${selectedConstitution ? 'active' : ''}`}
@@ -408,34 +328,28 @@ ${extraIntent}
               {selectedConstitution && <span className="check">✓</span>}
             </button>
           )}
-        </div>
-        <div className="toolbar-right">
-          <button
-            className="secondary"
-            onClick={handleUndoAiEdit}
-            disabled={aiEditHistory.undoStack.length === 0}
-            title="撤销 AI 修改（Ctrl/Cmd+Z）"
-          >
-            撤销AI
-          </button>
-          <button
-            className="secondary"
-            onClick={handleRedoAiEdit}
-            disabled={aiEditHistory.redoStack.length === 0}
-            title="重做 AI 修改（Ctrl/Cmd+Y）"
-          >
-            重做AI
-          </button>
-          <button
-            className={`secondary ${showPreview ? 'active' : ''}`}
-            onClick={() => setShowPreview(!showPreview)}
-          >
-            {showPreview ? '隐藏预览' : '显示预览'}
-          </button>
-          <button className="secondary" onClick={() => handlePolishAll('rewrite')} disabled={isPolishing}>
-            {isPolishing ? '润色中...' : '全文润色'}
-          </button>
-          <button className="primary" onClick={handleExport}>导出</button>
+          <div className="more-menu-wrapper">
+            <button
+              className="secondary more-menu-btn"
+              onClick={() => setShowMoreMenu(v => !v)}
+              title="更多操作"
+            >
+              ···
+            </button>
+            {showMoreMenu && (
+              <div className="more-menu">
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setShowMoreMenu(false)
+                    handleExport()
+                  }}
+                >
+                  导出
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -482,28 +396,43 @@ ${extraIntent}
           </div>
         )}
         {/* Markdown Editor */}
-        <div className={`editor-pane ${showPreview ? '' : 'full'}`}>
-          <textarea
-            ref={textareaRef}
-            className="markdown-input"
-            value={content}
-            onChange={e => setContent(e.target.value)}
-            onMouseUp={handleTextSelect}
-            onKeyUp={handleTextSelect}
-            placeholder="开始写作..."
-          />
-        </div>
-
-        {/* Preview Pane */}
-        {showPreview && (
-          <div className="preview-pane">
-            <div className="markdown-preview">
+        {/* Single Surface Editor */}
+        <div className="editor-pane">
+          {isInlineEditing ? (
+            <div
+              ref={editorRef}
+              className="editor-editable"
+              contentEditable
+              suppressContentEditableWarning
+              onInput={e => setContent(e.currentTarget.innerText)}
+              onMouseUp={handleTextSelect}
+              onKeyUp={handleTextSelect}
+              onBlur={() => {
+                setIsInlineEditing(false)
+                setShowPolishMenu(false)
+              }}
+              onPaste={e => {
+                e.preventDefault()
+                const text = e.clipboardData.getData('text/plain')
+                document.execCommand('insertText', false, text)
+              }}
+            >
+              {content}
+            </div>
+          ) : (
+            <div
+              className="editor-rendered markdown-preview"
+              onClick={() => {
+                setIsInlineEditing(true)
+                setShowPolishMenu(false)
+              }}
+            >
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {content || '*预览区域*'}
+                {content || '*点击开始写作...*'}
               </ReactMarkdown>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* AI 悬浮球 */}
         <FloatingBall
@@ -521,8 +450,7 @@ ${extraIntent}
           onChatHistoryChange={(history) => {
             onUpdateTopic({
               ...topic,
-              chatHistory: history,
-              aiEditHistory
+              chatHistory: history
             })
           }}
         />
@@ -639,7 +567,7 @@ ${extraIntent}
           height: 100%;
         }
 
-        .editor-toolbar {
+        .editor-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
@@ -648,13 +576,13 @@ ${extraIntent}
           border-bottom: 1px solid var(--border-color);
         }
 
-        .toolbar-left, .toolbar-right {
+        .header-left, .header-right {
           display: flex;
           align-items: center;
           gap: 12px;
         }
 
-        .topic-title {
+        .header-title {
           font-weight: 600;
           font-size: 16px;
         }
@@ -686,9 +614,31 @@ ${extraIntent}
           font-weight: bold;
         }
 
-        .toolbar-right button.active {
-          background: var(--primary-color);
-          color: white;
+        .more-menu-wrapper {
+          position: relative;
+        }
+
+        .more-menu-btn {
+          min-width: 42px;
+          letter-spacing: 2px;
+          font-weight: 700;
+        }
+
+        .more-menu {
+          position: absolute;
+          right: 0;
+          top: calc(100% + 6px);
+          background: white;
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          padding: 8px;
+          box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+          z-index: 20;
+        }
+
+        .more-menu button {
+          width: 100%;
+          white-space: nowrap;
         }
 
         .editor-main {
@@ -802,32 +752,30 @@ ${extraIntent}
           flex: 1;
           display: flex;
           flex-direction: column;
-          border-right: 1px solid var(--border-color);
           min-width: 0;
+          min-height: 0;
         }
 
-        .editor-pane.full {
-          border-right: none;
-        }
-
-        .markdown-input {
+        .editor-editable,
+        .editor-rendered {
           flex: 1;
+          min-height: 0;
+          overflow-y: auto;
           padding: 20px;
-          border: none;
-          resize: none;
+          line-height: 1.8;
+          background: white;
+        }
+
+        .editor-editable {
+          white-space: pre-wrap;
+          word-break: break-word;
           font-family: 'Monaco', 'Menlo', monospace;
           font-size: 15px;
-          line-height: 1.8;
-        }
-
-        .markdown-input:focus {
           outline: none;
         }
 
-        .preview-pane {
-          flex: 1;
-          overflow-y: auto;
-          background: white;
+        .editor-rendered {
+          cursor: text;
         }
 
         .markdown-preview {
@@ -1019,3 +967,4 @@ ${extraIntent}
 }
 
 export default Editor
+

@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react'
+﻿import { useState, useEffect } from 'react'
 import TopicList from './pages/TopicList'
 import Editor from './pages/Editor'
 import Settings from './pages/Settings'
 
-// 创作宪法类型定义
 export type CreationConstitution = {
   id: string
   name: string
@@ -19,15 +18,20 @@ export type Topic = {
   id: string
   title: string
   description: string
-  status: 'pending' | 'in_progress' | 'completed'
+  status: 'pending' | 'in_progress' | 'completed' | string
   content: string
   tags: string[]
   createdAt: string
   updatedAt: string
-  order?: number  // 同一列内的排序顺序
-  constitutionId: string | null  // 关联的创作宪法 ID，null 表示不启用
-  temporaryAdjustments: string    // 临时调整的规则（只对当前文档生效）
-  chatHistory: { role: 'user' | 'assistant', content: string }[]  // AI 聊天记录
+  order?: number
+  constitutionId?: string | null
+  temporaryAdjustments?: string
+  chatHistory?: { role: 'user' | 'assistant', content: string }[]
+  aiEditHistory?: {
+    undoStack: string[]
+    redoStack: string[]
+    maxSteps: number
+  }
 }
 
 export type Config = {
@@ -37,10 +41,26 @@ export type Config = {
     baseUrl: string
     model: string
   }
-  creationConstitutions: CreationConstitution[]  // 多套创作宪法
+  creationConstitutions?: CreationConstitution[]
 }
 
 type Page = 'topics' | 'editor' | 'settings'
+
+function normalizeTopic(topic: Topic): Topic {
+  return {
+    ...topic,
+    constitutionId: topic.constitutionId ?? null,
+    temporaryAdjustments: topic.temporaryAdjustments ?? '',
+    chatHistory: topic.chatHistory ?? []
+  }
+}
+
+function normalizeConfig(config: Config): Config {
+  return {
+    ...config,
+    creationConstitutions: config.creationConstitutions || []
+  }
+}
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>('topics')
@@ -48,43 +68,40 @@ function App() {
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null)
   const [config, setConfig] = useState<Config | null>(null)
 
-  // Load topics and config on mount
   useEffect(() => {
     loadTopics()
     loadConfig()
   }, [])
 
-  // Listen for menu events
   useEffect(() => {
-    window.electronAPI.onMenuNewTopic(() => {
+    const offNewTopic = window.electronAPI.onMenuNewTopic(() => {
       setCurrentPage('topics')
-      // Trigger new topic modal
       const event = new CustomEvent('new-topic')
       window.dispatchEvent(event)
     })
 
-    window.electronAPI.onMenuExport(() => {
-      if (selectedTopicId) {
-        const topic = topics.find(t => t.id === selectedTopicId)
-        if (topic) {
-          handleExport(topic.content, topic.title)
-        }
+    const offExport = window.electronAPI.onMenuExport(() => {
+      if (!selectedTopicId) return
+      const topic = topics.find(t => t.id === selectedTopicId)
+      if (topic) {
+        handleExport(topic.content, topic.title)
       }
     })
+
+    return () => {
+      offNewTopic()
+      offExport()
+    }
   }, [selectedTopicId, topics])
 
   const loadTopics = async () => {
     const data = await window.electronAPI.getTopics()
-    setTopics(data.topics || [])
+    setTopics((data.topics || []).map(normalizeTopic))
   }
 
   const loadConfig = async () => {
     const cfg = await window.electronAPI.getConfig()
-    // 如果没有创作宪法，提供一个默认的
-    if (cfg && !cfg.creationConstitutions) {
-      cfg.creationConstitutions = []
-    }
-    setConfig(cfg)
+    setConfig(normalizeConfig(cfg))
   }
 
   const saveTopics = async (newTopics: Topic[]) => {
@@ -93,16 +110,17 @@ function App() {
   }
 
   const saveConfig = async (newConfig: Config) => {
-    await window.electronAPI.saveConfig(newConfig)
-    setConfig(newConfig)
+    const normalized = normalizeConfig(newConfig)
+    await window.electronAPI.saveConfig(normalized)
+    setConfig(normalized)
   }
 
   const handleExport = async (content: string, title: string) => {
     const result = await window.electronAPI.exportMarkdown(content, title)
     if (result.success) {
-      alert(`已导出到: ${result.path}`)
+      alert(`已导出到：${result.path}`)
     } else if (!result.canceled) {
-      alert(`导出失败: ${result.error}`)
+      alert(`导出失败：${result.error}`)
     }
   }
 
@@ -110,7 +128,6 @@ function App() {
     setSelectedTopicId(topicId)
     setCurrentPage('editor')
 
-    // Update status to in_progress if pending
     const topic = topics.find(t => t.id === topicId)
     if (topic && topic.status === 'pending') {
       const updatedTopics = topics.map(t =>
@@ -130,7 +147,6 @@ function App() {
 
   return (
     <div className="app">
-      {/* Header */}
       <header className="app-header">
         <div className="header-left">
           <h1 className="app-title" onClick={() => setCurrentPage('topics')}>写作Agent</h1>
@@ -158,7 +174,6 @@ function App() {
         </nav>
       </header>
 
-      {/* Main Content */}
       <main className="app-main">
         {currentPage === 'topics' && (
           <TopicList
@@ -172,7 +187,7 @@ function App() {
             topic={selectedTopic}
             onUpdateTopic={(updated) => {
               const newTopics = topics.map(t =>
-                t.id === updated.id ? updated : t
+                t.id === updated.id ? normalizeTopic(updated) : t
               )
               saveTopics(newTopics)
             }}

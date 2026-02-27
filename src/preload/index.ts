@@ -1,7 +1,46 @@
-import { contextBridge, ipcRenderer } from 'electron'
+﻿import { contextBridge, ipcRenderer } from 'electron'
 
-// Expose protected methods that allow the renderer process to use
-// the ipcRenderer without exposing the entire object
+type CreationConstitution = {
+  id: string
+  name: string
+  isDefault: boolean
+  tone: 'professional' | 'casual' | 'humorous' | 'serious' | 'technical'
+  perspective: 'first-person' | 'third-person'
+  targetAudience: string
+  contentRules: string[]
+  customConstitution: string
+}
+
+type Topic = {
+  id: string
+  title: string
+  description: string
+  status: 'pending' | 'in_progress' | 'completed' | string
+  content: string
+  tags: string[]
+  createdAt: string
+  updatedAt: string
+  order?: number
+  constitutionId?: string | null
+  temporaryAdjustments?: string
+  chatHistory?: { role: 'user' | 'assistant', content: string }[]
+  aiEditHistory?: {
+    undoStack: string[]
+    redoStack: string[]
+    maxSteps: number
+  }
+}
+
+type Config = {
+  llm: {
+    provider: string
+    apiKey: string
+    baseUrl: string
+    model: string
+  }
+  creationConstitutions?: CreationConstitution[]
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   // Topics
   getTopics: () => ipcRenderer.invoke('get-topics'),
@@ -21,14 +60,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Menu events
   onMenuNewTopic: (callback: () => void) => {
-    ipcRenderer.on('menu-new-topic', callback)
+    const handler = () => callback()
+    ipcRenderer.on('menu-new-topic', handler)
+    return () => ipcRenderer.removeListener('menu-new-topic', handler)
   },
   onMenuExport: (callback: () => void) => {
-    ipcRenderer.on('menu-export', callback)
+    const handler = () => callback()
+    ipcRenderer.on('menu-export', handler)
+    return () => ipcRenderer.removeListener('menu-export', handler)
   }
 })
 
-// Type declarations for the exposed API
 declare global {
   interface Window {
     electronAPI: {
@@ -38,28 +80,8 @@ declare global {
       saveConfig: (config: Config) => Promise<{ success: boolean; error?: string }>
       exportMarkdown: (content: string, title: string) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
       callLLM: (messages: Array<{ role: string; content: string }>) => Promise<{ success: boolean; content?: string; error?: string }>
-      onMenuNewTopic: (callback: () => void) => void
-      onMenuExport: (callback: () => void) => void
+      onMenuNewTopic: (callback: () => void) => () => void
+      onMenuExport: (callback: () => void) => () => void
     }
-  }
-}
-
-interface Topic {
-  id: string
-  title: string
-  description: string
-  status: 'pending' | 'in_progress' | 'completed'
-  content: string
-  tags: string[]
-  createdAt: string
-  updatedAt: string
-}
-
-interface Config {
-  llm: {
-    provider: string
-    apiKey: string
-    baseUrl: string
-    model: string
   }
 }

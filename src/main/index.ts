@@ -30,7 +30,8 @@ if (!existsSync(configFilePath)) {
       apiKey: '',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-4'
-    }
+    },
+    creationConstitutions: []
   }, null, 2), 'utf-8')
 }
 
@@ -157,10 +158,17 @@ ipcMain.handle('save-topics', (_event, data) => {
 ipcMain.handle('get-config', () => {
   try {
     const data = readFileSync(configFilePath, 'utf-8')
-    return JSON.parse(data)
+    const parsed = JSON.parse(data)
+    return {
+      ...parsed,
+      creationConstitutions: parsed.creationConstitutions || []
+    }
   } catch (error) {
     log.error('Error reading config:', error)
-    return { llm: { provider: 'openai', apiKey: '', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4' } }
+    return {
+      llm: { provider: 'openai', apiKey: '', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4' },
+      creationConstitutions: []
+    }
   }
 })
 

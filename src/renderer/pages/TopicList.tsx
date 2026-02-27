@@ -28,7 +28,7 @@ function SortableTopicCard({ topic, onSelect, onEdit, onDelete, onStatusChange, 
   onSelect: (id: string) => void
   onEdit: (topic: Topic, e: React.MouseEvent) => void
   onDelete: (id: string, e: React.MouseEvent) => void
-  onStatusChange: (id: string, status: Topic['status'], e: React.MouseEvent) => void
+  onStatusChange: (id: string, status: Topic['status']) => void
   onDragStart: (e: React.DragEvent, id: string) => void
 }) {
   const getStatusBadge = (status: Topic['status']) => {
@@ -56,12 +56,12 @@ function SortableTopicCard({ topic, onSelect, onEdit, onDelete, onStatusChange, 
           <p className="topic-description">{topic.description}</p>
         )}
         <div className="topic-meta">
-          <span>更新于 {new Date(topic.updatedAt).toLocaleDateString()}</span>
+          <span>更新于：{new Date(topic.updatedAt).toLocaleDateString()}</span>
         </div>
         <div className="topic-actions">
           <select
             value={topic.status}
-            onChange={e => onStatusChange(topic.id, e.target.value as Topic['status'], e as unknown as React.MouseEvent)}
+            onChange={e => onStatusChange(topic.id, e.target.value as Topic['status'])}
             onClick={e => e.stopPropagation()}
           >
             <option value="pending">待创作</option>
@@ -102,7 +102,7 @@ function KanbanColumn({
   onSelectTopic: (id: string) => void
   onEdit: (topic: Topic, e: React.MouseEvent) => void
   onDeleteTopic: (id: string, e: React.MouseEvent) => void
-  onStatusChange: (id: string, status: Topic['status'], e: React.MouseEvent) => void
+  onStatusChange: (id: string, status: Topic['status']) => void
   onDragStart: (e: React.DragEvent, id: string) => void
   onDragOver: (e: React.DragEvent) => void
   onDropColumn: (e: React.DragEvent, status: string) => void
@@ -302,7 +302,10 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
         content: '',
         tags: [],
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
+        constitutionId: null,
+        temporaryAdjustments: '',
+        chatHistory: []
       }
       onSaveTopics([...topics, newTopic])
     }
@@ -327,8 +330,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
     }
   }
 
-  const handleStatusChange = (id: string, status: Topic['status'], e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleStatusChange = (id: string, status: Topic['status']) => {
     const updated = topics.map(t =>
       t.id === id ? { ...t, status, updatedAt: new Date().toISOString() } : t
     )
@@ -361,10 +363,10 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           setGeneratedTopics(topics)
           setShowGeneratedModal(true)
         } else {
-          alert('生成失败：无法解析返回内容')
+          alert('生成选题失败：返回结果不是有效 JSON')
         }
       } else {
-        alert(`生成失败：${response.error}`)
+        alert(`生成选题失败：${response.error}`)
       }
     } catch (error) {
       alert('生成选题失败')
@@ -397,13 +399,13 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           const topics = JSON.parse(jsonMatch[0])
           setGeneratedTopics(topics)
         } else {
-          alert('生成失败：无法解析返回内容')
+          alert('重新生成失败：返回结果不是有效 JSON')
         }
       } else {
-        alert(`生成失败：${response.error}`)
+        alert(`重新生成失败：${response.error}`)
       }
     } catch (error) {
-      alert('生成选题失败')
+      alert('重新生成失败')
     }
     setIsRegenerating(false)
   }
@@ -436,7 +438,10 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
       content: '',
       tags: [],
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      constitutionId: null,
+      temporaryAdjustments: '',
+      chatHistory: []
     }))
 
     onSaveTopics([...topics, ...newTopics])
@@ -464,7 +469,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
 
   const handleDeleteColumn = (columnId: string) => {
     if (columnId === 'pending' || columnId === 'in_progress' || columnId === 'completed') {
-      alert('默认列无法删除')
+      alert('默认列不能删除')
       return
     }
     setColumns(columns.filter(col => col.id !== columnId))
@@ -514,7 +519,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
     // 移除被拖拽的卡片
     let filtered = currentStatusTopics.filter(t => t.id !== topicId)
 
-    // 找到目标卡片的位置
+    // 找到目标卡片位置
     const targetIndex = filtered.findIndex(t => t.id === targetTopicId)
     const insertIndex = position === 'before' ? targetIndex : targetIndex + 1
 
@@ -524,7 +529,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
       filtered.splice(insertIndex, 0, { ...draggedTopic, status: currentStatusTopics[0]?.status || 'pending' })
     }
 
-    // 更新所有卡片的 order
+    // 更新同一列内卡片的 order
     const now = new Date().toISOString()
     const updatedTopics = topics.map(t => {
       const newIndex = filtered.findIndex(ft => ft.id === t.id)
@@ -538,7 +543,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
   }
 
   const getStatusBadge = (status: Topic['status']) => {
-    const statusMap = {
+    const statusMap: Record<string, { label: string; class: string }> = {
       pending: { label: '待创作', class: 'pending' },
       in_progress: { label: '进行中', class: 'in_progress' },
       completed: { label: '已完成', class: 'completed' }
@@ -549,7 +554,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
 
   // 看板视图渲染
   const renderKanbanView = () => {
-    // 筛选卡片
+    // 按关键词筛选卡片
     const filterTopics = (topic: Topic) => {
       if (!kanbanSearch.trim()) return true
       const searchLower = kanbanSearch.toLowerCase()
@@ -629,7 +634,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           <div className="section-header">
             <h3>筛选</h3>
             <button className="icon-btn" onClick={() => setIsKanbanView(!isKanbanView)} title={isKanbanView ? '列表视图' : '看板视图'}>
-              {isKanbanView ? '📋' : '📊'}
+              {isKanbanView ? '列表' : '看板'}
             </button>
           </div>
           {!isKanbanView && (
@@ -660,12 +665,17 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           <h3>AI 生成选题</h3>
           <div className="generate-input">
             <div className="input-with-template">
-              <input
-                type="text"
-                placeholder="输入主题..."
+              <textarea
+                className="generate-topic-input"
+                placeholder="请输入你的选题需求，例如：主题、读者、风格、禁用词"
                 value={generateTopic}
                 onChange={e => setGenerateTopic(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleGenerateTopics()}
+                rows={4}
+                onKeyDown={e => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    handleGenerateTopics()
+                  }
+                }}
               />
               {/* 模板按钮 */}
               <div className="template-dropdown">
@@ -674,7 +684,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
                   onClick={() => setShowTemplateMenu(!showTemplateMenu)}
                   title="提示模板"
                 >
-                  💡
+                  📝
                 </button>
                 {showTemplateMenu && (
                   <div className="template-menu">
@@ -691,13 +701,14 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
               </div>
             </div>
             <button
-              className="secondary"
+              className="secondary generate-submit-btn"
               onClick={handleGenerateTopics}
               disabled={isGenerating}
             >
               {isGenerating ? '生成中...' : '生成'}
             </button>
           </div>
+          <p className="generate-tip">提示：支持粘贴完整需求，按 Ctrl/Command + Enter 可快速生成。</p>
         </div>
       </aside>
 
@@ -736,12 +747,12 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
                       <p className="topic-description">{topic.description}</p>
                     )}
                     <div className="topic-meta">
-                      <span>更新于 {new Date(topic.updatedAt).toLocaleDateString()}</span>
+                      <span>更新于：{new Date(topic.updatedAt).toLocaleDateString()}</span>
                     </div>
                     <div className="topic-actions">
                       <select
                         value={topic.status}
-                        onChange={e => handleStatusChange(topic.id, e.target.value as Topic['status'], e)}
+                        onChange={e => handleStatusChange(topic.id, e.target.value as Topic['status'])}
                         onClick={e => e.stopPropagation()}
                       >
                         <option value="pending">待创作</option>
@@ -808,13 +819,13 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
                     setSelectedTopics([])
                   }}
                 />
-                <span className="toggle-text">{isMultiSelectMode ? '多选' : '单选'}</span>
+                <span className="toggle-text">{isMultiSelectMode ? '多选模式' : '单选模式'}</span>
               </label>
             </div>
             <p className="modal-subtitle">
               {isMultiSelectMode
-                ? 'AI 为你生成了 3 个选题，可选择多个进行批量创建：'
-                : 'AI 为你生成了 3 个选题，请点击选择：'}
+                ? 'AI 已生成 3 个选题，你可以多选后批量创建。'
+                : 'AI 已生成 3 个选题，点击一个继续。'}
             </p>
             <div className="generated-topics-list">
               {generatedTopics.map((topic, index) => {
@@ -833,8 +844,8 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
                         className="topic-checkbox"
                       />
                     )}
-                    <h4>{topic.title}</h4>
-                    <p>{topic.description}</p>
+                    <h4 title={topic.title}>{topic.title}</h4>
+                    <p title={topic.description}>{topic.description}</p>
                   </div>
                 )
               })}
@@ -849,7 +860,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
               </button>
               {isMultiSelectMode && selectedTopics.length > 0 && (
                 <button className="primary" onClick={handleBatchCreate}>
-                  批量创建 ({selectedTopics.length}个)
+                  批量创建 ({selectedTopics.length})
                 </button>
               )}
               <button className="secondary" onClick={() => setShowGeneratedModal(false)}>取消</button>
@@ -865,7 +876,7 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
         }
 
         .sidebar {
-          width: 240px;
+          width: 300px;
           background: var(--sidebar-bg);
           padding: 20px;
           border-right: 1px solid var(--border-color);
@@ -934,38 +945,38 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
 
         .generate-input {
           display: flex;
-          gap: 8px;
-          align-items: flex-start;
+          flex-direction: column;
+          gap: 10px;
         }
 
-        .generate-input input {
-          flex: 1;
-        }
-
-        /* 模板输入框容器 */
+        /* 输入 + 模板按钮 */
         .input-with-template {
-          display: flex;
-          flex: 1;
           position: relative;
         }
 
-        .input-with-template input {
-          flex: 1;
-          border-radius: 6px 0 0 6px;
+        .generate-topic-input {
+          width: 100%;
+          resize: vertical;
+          min-height: 96px;
+          line-height: 1.5;
+          padding: 10px 44px 10px 12px;
         }
 
         /* 模板下拉按钮 */
         .template-dropdown {
-          position: relative;
+          position: absolute;
+          top: 8px;
+          right: 8px;
         }
 
         .template-btn {
-          height: 40px;
-          padding: 0 12px;
+          height: 28px;
+          min-width: 28px;
+          padding: 0 8px;
           border: 1px solid var(--border-color);
-          border-left: none;
+          color: var(--text-secondary);
           background: var(--sidebar-bg);
-          border-radius: 0 6px 6px 0;
+          border-radius: 6px;
           cursor: pointer;
           font-size: 16px;
         }
@@ -979,7 +990,9 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           position: absolute;
           top: 100%;
           left: 0;
-          right: 0;
+          width: 320px;
+          max-height: 280px;
+          overflow-y: auto;
           background: white;
           border: 1px solid var(--border-color);
           border-radius: 6px;
@@ -997,9 +1010,10 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           border: none;
           cursor: pointer;
           font-size: 13px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
+          white-space: normal;
+          overflow: visible;
+          text-overflow: clip;
+          line-height: 1.45;
         }
 
         .template-menu button:hover {
@@ -1008,6 +1022,17 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
 
         .template-menu button:not(:last-child) {
           border-bottom: 1px solid var(--border-color);
+        }
+
+        .generate-submit-btn {
+          width: 100%;
+        }
+
+        .generate-tip {
+          margin-top: 8px;
+          font-size: 12px;
+          color: var(--text-secondary);
+          line-height: 1.5;
         }
 
         .topic-list {
@@ -1363,6 +1388,8 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           color: var(--text-secondary);
           font-size: 14px;
           margin-bottom: 16px;
+          white-space: normal;
+          word-break: break-word;
         }
 
         .form-group {
@@ -1384,7 +1411,10 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
         }
 
         .generated-modal {
-          max-width: 560px;
+          max-width: 720px;
+          max-height: 82vh;
+          display: flex;
+          flex-direction: column;
         }
 
         .generated-topics-list {
@@ -1392,6 +1422,9 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           flex-direction: column;
           gap: 12px;
           margin-bottom: 20px;
+          max-height: 52vh;
+          overflow-y: auto;
+          padding-right: 4px;
         }
 
         .generated-topic-card {
@@ -1429,12 +1462,16 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
           margin-bottom: 6px;
           color: var(--text-primary);
           padding-right: 24px;
+          white-space: normal;
+          word-break: break-word;
         }
 
         .generated-topic-card p {
           font-size: 13px;
           color: var(--text-secondary);
           margin: 0;
+          white-space: pre-wrap;
+          word-break: break-word;
         }
 
         /* Badge Styles */
@@ -1518,3 +1555,4 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
 }
 
 export default TopicList
+
