@@ -5,6 +5,13 @@ import { Config, CreationConstitution, Topic } from '../App'
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  // 普通聊天回复可选携带“应用到正文”的候选改动
+  proposal?: {
+    original: string
+    modified: string
+    isFullText: boolean
+    range: { start: number, end: number } | null
+  }
 }
 
 interface FloatingBallProps {
@@ -12,22 +19,28 @@ interface FloatingBallProps {
   constitutions: CreationConstitution[]
   topic: Topic
   content: string                         // 编辑区当前内容
-  onContentChange: (content: string) => void  // 写回编辑区
+  onProposeAiChange: (change: {
+    original: string
+    modified: string
+    isFullText: boolean
+    range: { start: number, end: number } | null
+  }) => void
   selection: string                       // 编辑区选中的文字
   selectionRange: { start: number, end: number } | null
   onClearSelection: () => void            // 清除选中状态
   buildConstitutionPrompt: () => string   // 构建创作提示词
+  defaultExpanded?: boolean
   initialChatHistory?: { role: 'user' | 'assistant', content: string }[]  // 初始聊天记录
   onChatHistoryChange?: (history: { role: 'user' | 'assistant', content: string }[]) => void  // 聊天记录变化回调
 }
 
 function FloatingBall({
-  config, constitutions, topic, content, onContentChange,
+  config, constitutions, topic, content, onProposeAiChange,
   selection, selectionRange, onClearSelection, buildConstitutionPrompt,
-  initialChatHistory, onChatHistoryChange
+  defaultExpanded = true, initialChatHistory, onChatHistoryChange
 }: FloatingBallProps) {
   // 面板展开/收起
-  const [expanded, setExpanded] = useState(true) // 默认展开
+  const [expanded, setExpanded] = useState(defaultExpanded) // 默认展开
   // 聊天相关状态
   const [messages, setMessages] = useState<ChatMessage[]>(initialChatHistory || [])
   const [input, setInput] = useState('')
@@ -46,6 +59,11 @@ function FloatingBall({
       setMessages(initialChatHistory)
     }
   }, [initialChatHistory])
+
+  // 外部切换“起步模式”时，同步面板展开状态
+  useEffect(() => {
+    setExpanded(defaultExpanded)
+  }, [defaultExpanded, topic.id])
   // 未读消息红点
   const [hasUnread, setHasUnread] = useState(false)
   // 拖拽相关状态
@@ -175,8 +193,16 @@ ${conversationHistory}
         { role: 'user', content: fullPrompt }
       ])
       if (response.success && response.content) {
-        onContentChange(response.content)
-        setMessages([])
+        onProposeAiChange({
+          original: content,
+          modified: response.content,
+          isFullText: true,
+          range: null
+        })
+        setMessages(prev => [
+          ...prev,
+          { role: 'assistant', content: '我已经生成初稿建议，请先在差异预览里确认是否应用。' }
+        ])
       } else {
         alert(`生成失败：${response.error}`)
       }
@@ -198,8 +224,6 @@ ${conversationHistory}
 
     if (selection && selectionRange) {
       // 局部修改模式
-      const beforeText = content.slice(0, selectionRange.start)
-      const afterText = content.slice(selectionRange.end)
       const beforeContext = content.slice(Math.max(0, selectionRange.start - 300), selectionRange.start)
       const afterContext = content.slice(selectionRange.end, Math.min(content.length, selectionRange.end + 300))
 
@@ -229,10 +253,16 @@ ${userMessage}
           { role: 'user', content: modifyPrompt }
         ])
         if (response.success && response.content) {
-          const newContent = beforeText + response.content + afterText
-          onContentChange(newContent)
-          onClearSelection()
-          setMessages(prev => [...prev, { role: 'assistant', content: `已修改选中内容：\n\n${response.content}` }])
+          onProposeAiChange({
+            original: selection,
+            modified: response.content,
+            isFullText: false,
+            range: selectionRange
+          })
+          setMessages(prev => [
+            ...prev,
+            { role: 'assistant', content: '我已经生成选区修改建议，请先在差异预览里确认是否应用。' }
+          ])
         } else {
           setMessages(prev => [...prev, { role: 'assistant', content: `修改失败：${response.error}` }])
         }
@@ -252,7 +282,19 @@ ${userMessage}
       try {
         const response = await window.electronAPI.callLLM(contextMessages)
         if (response.success && response.content) {
-          setMessages(prev => [...prev, { role: 'assistant', content: response.content! }])
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: response.content!,
+              proposal: {
+                original: content,
+                modified: response.content!,
+                isFullText: true,
+                range: null
+              }
+            }
+          ])
           // 如果面板收起，显示未读红点
           if (!expanded) setHasUnread(true)
         } else {
@@ -338,6 +380,17 @@ ${userMessage}
               messages.map((msg, i) => (
                 <div key={i} className={`fp-msg ${msg.role}`}>
                   <div className="fp-msg-content">{msg.content}</div>
+                  {msg.role === 'assistant' && msg.proposal && (
+                    <div className="fp-msg-actions">
+                      <button
+                        className="secondary fp-apply-btn"
+                        onClick={() => onProposeAiChange(msg.proposal!)}
+                        disabled={isLoading}
+                      >
+                        应用到正文（预览）
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -538,6 +591,15 @@ ${userMessage}
 
         .fp-msg.assistant .fp-msg-content {
           background: var(--sidebar-bg);
+        }
+
+        .fp-msg-actions {
+          margin-top: 6px;
+        }
+
+        .fp-apply-btn {
+          font-size: 12px !important;
+          padding: 4px 10px !important;
         }
 
         .fp-msg-content.loading {

@@ -14,16 +14,31 @@ interface EditorProps {
 }
 
 function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorProps) {
+  type StartMode = 'direct' | 'chat'
+  const MAX_AI_HISTORY_STEPS = 50
   const [content, setContent] = useState(topic.content)
   const [showPreview, setShowPreview] = useState(true)
   const [isPolishing, setIsPolishing] = useState(false) // 润色加载状态
+  const [startMode, setStartMode] = useState<StartMode | null>(() => {
+    if (topic.content.trim() || (topic.chatHistory?.length || 0) > 0) {
+      return 'chat'
+    }
+    return null
+  })
+  const [draftIntent, setDraftIntent] = useState('')
+  const [isDraftGenerating, setIsDraftGenerating] = useState(false)
   const [pendingPolish, setPendingPolish] = useState<{
-    original: string, modified: string, isFullText: boolean
+    original: string, modified: string, isFullText: boolean, range: { start: number, end: number } | null
   } | null>(null) // 待确认的润色结果
   const [selection, setSelection] = useState('')
   const [selectionRange, setSelectionRange] = useState<{ start: number, end: number } | null>(null)
   const [showPolishMenu, setShowPolishMenu] = useState(false)
   const [polishPosition, setPolishPosition] = useState({ x: 0, y: 0 })
+  const [aiEditHistory, setAiEditHistory] = useState(() => ({
+    undoStack: topic.aiEditHistory?.undoStack || [],
+    redoStack: topic.aiEditHistory?.redoStack || [],
+    maxSteps: topic.aiEditHistory?.maxSteps || MAX_AI_HISTORY_STEPS
+  }))
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // 创作提示词相关状态
@@ -36,14 +51,95 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
   // 获取当前选中的提示词
   const selectedConstitution = constitutions.find(c => c.id === selectedConstitutionId) || null
 
+  // 切换文章时同步内容和历史
+  useEffect(() => {
+    setContent(topic.content)
+    if (topic.content.trim() || (topic.chatHistory?.length || 0) > 0) {
+      setStartMode('chat')
+    } else {
+      setStartMode(null)
+    }
+    setAiEditHistory({
+      undoStack: topic.aiEditHistory?.undoStack || [],
+      redoStack: topic.aiEditHistory?.redoStack || [],
+      maxSteps: topic.aiEditHistory?.maxSteps || MAX_AI_HISTORY_STEPS
+    })
+  }, [topic.id])
+
+  // 记录 AI 改动（入撤销栈，清空重做栈）
+  const applyAiContentChange = (nextContent: string) => {
+    if (nextContent === content) return
+    setAiEditHistory(prev => ({
+      undoStack: [...prev.undoStack, content].slice(-MAX_AI_HISTORY_STEPS),
+      redoStack: [],
+      maxSteps: MAX_AI_HISTORY_STEPS
+    }))
+    setContent(nextContent)
+  }
+
+  // 撤销 AI 改动
+  const handleUndoAiEdit = () => {
+    if (aiEditHistory.undoStack.length === 0) return
+    const previousContent = aiEditHistory.undoStack[aiEditHistory.undoStack.length - 1]
+    const nextUndoStack = aiEditHistory.undoStack.slice(0, -1)
+    const nextRedoStack = [...aiEditHistory.redoStack, content].slice(-MAX_AI_HISTORY_STEPS)
+
+    setAiEditHistory({
+      undoStack: nextUndoStack,
+      redoStack: nextRedoStack,
+      maxSteps: MAX_AI_HISTORY_STEPS
+    })
+    setContent(previousContent)
+  }
+
+  // 重做 AI 改动
+  const handleRedoAiEdit = () => {
+    if (aiEditHistory.redoStack.length === 0) return
+    const nextContent = aiEditHistory.redoStack[aiEditHistory.redoStack.length - 1]
+    const nextRedoStack = aiEditHistory.redoStack.slice(0, -1)
+    const nextUndoStack = [...aiEditHistory.undoStack, content].slice(-MAX_AI_HISTORY_STEPS)
+
+    setAiEditHistory({
+      undoStack: nextUndoStack,
+      redoStack: nextRedoStack,
+      maxSteps: MAX_AI_HISTORY_STEPS
+    })
+    setContent(nextContent)
+  }
+
+  // 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Y 或 Ctrl/Cmd+Shift+Z 重做
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isCtrlOrCmd = event.ctrlKey || event.metaKey
+      if (!isCtrlOrCmd) return
+
+      const key = event.key.toLowerCase()
+      const shouldRedoByY = key === 'y'
+      const shouldRedoByShiftZ = key === 'z' && event.shiftKey
+      const shouldUndo = key === 'z' && !event.shiftKey
+
+      if (shouldUndo && aiEditHistory.undoStack.length > 0) {
+        event.preventDefault()
+        handleUndoAiEdit()
+      } else if ((shouldRedoByY || shouldRedoByShiftZ) && aiEditHistory.redoStack.length > 0) {
+        event.preventDefault()
+        handleRedoAiEdit()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [aiEditHistory, content])
+
   // 保存提示词选择到 topic
   useEffect(() => {
     onUpdateTopic({
       ...topic,
       constitutionId: selectedConstitutionId,
-      temporaryAdjustments: temporaryAdjustments
+      temporaryAdjustments: temporaryAdjustments,
+      aiEditHistory
     })
-  }, [selectedConstitutionId, temporaryAdjustments])
+  }, [selectedConstitutionId, temporaryAdjustments, aiEditHistory])
 
   // Auto-save
   useEffect(() => {
@@ -52,17 +148,28 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
         onUpdateTopic({
           ...topic,
           content,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
+          aiEditHistory
         })
       }
     }, 1000)
     return () => clearTimeout(timer)
-  }, [content])
+  }, [content, aiEditHistory])
 
   // 清除选中状态的回调（给 FloatingBall 用）
   const clearSelection = () => {
     setSelection('')
     setSelectionRange(null)
+  }
+
+  // 统一接收 AI 候选改动，先进入预览，再由用户确认应用
+  const handleProposeAiChange = (change: {
+    original: string
+    modified: string
+    isFullText: boolean
+    range: { start: number, end: number } | null
+  }) => {
+    setPendingPolish(change)
   }
 
   // 构建创作提示词的 system prompt
@@ -162,7 +269,8 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
         setPendingPolish({
           original: selection,
           modified: response.content,
-          isFullText: false
+          isFullText: false,
+          range: selectionRange
         })
       } else {
         alert(`润色失败：${response.error}`)
@@ -195,7 +303,8 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
         setPendingPolish({
           original: content,
           modified: response.content,
-          isFullText: true
+          isFullText: true,
+          range: null
         })
       } else {
         alert(`润色失败：${response.error}`)
@@ -211,11 +320,18 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     if (!pendingPolish) return
     if (pendingPolish.isFullText) {
       // 全文润色：直接替换整篇内容
-      setContent(pendingPolish.modified)
+      applyAiContentChange(pendingPolish.modified)
     } else {
       // 选中润色：替换选中部分
-      const newContent = content.replace(pendingPolish.original, pendingPolish.modified)
-      setContent(newContent)
+      if (pendingPolish.range) {
+        const before = content.slice(0, pendingPolish.range.start)
+        const after = content.slice(pendingPolish.range.end)
+        applyAiContentChange(before + pendingPolish.modified + after)
+        clearSelection()
+      } else {
+        const newContent = content.replace(pendingPolish.original, pendingPolish.modified)
+        applyAiContentChange(newContent)
+      }
     }
     setPendingPolish(null)
   }
@@ -233,6 +349,45 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     } else if (!result.canceled) {
       alert(`导出失败：${result.error}`)
     }
+  }
+
+  // 直接生成初稿：仍走“先预览再应用”链路
+  const handleGenerateDraftFromStart = async () => {
+    setIsDraftGenerating(true)
+    const constitutionPrompt = buildConstitutionPrompt()
+    const extraIntent = draftIntent.trim()
+      ? `\n【用户补充重点】\n${draftIntent.trim()}\n`
+      : ''
+
+    const prompt = `你是一个写作助手，正在帮助用户创作文章。
+
+【选题名称】${topic.title}
+${topic.description ? `【选题描述】${topic.description}\n` : ''}
+${constitutionPrompt}
+${extraIntent}
+---
+
+请基于以上信息输出一篇完整初稿，直接输出正文，不要解释。`
+
+    try {
+      const response = await window.electronAPI.callLLM([
+        { role: 'user', content: prompt }
+      ])
+      if (response.success && response.content) {
+        setStartMode('direct')
+        handleProposeAiChange({
+          original: content,
+          modified: response.content,
+          isFullText: true,
+          range: null
+        })
+      } else {
+        alert(`生成失败：${response.error}`)
+      }
+    } catch (error) {
+      alert('生成失败')
+    }
+    setIsDraftGenerating(false)
   }
 
   return (
@@ -256,6 +411,22 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
         </div>
         <div className="toolbar-right">
           <button
+            className="secondary"
+            onClick={handleUndoAiEdit}
+            disabled={aiEditHistory.undoStack.length === 0}
+            title="撤销 AI 修改（Ctrl/Cmd+Z）"
+          >
+            撤销AI
+          </button>
+          <button
+            className="secondary"
+            onClick={handleRedoAiEdit}
+            disabled={aiEditHistory.redoStack.length === 0}
+            title="重做 AI 修改（Ctrl/Cmd+Y）"
+          >
+            重做AI
+          </button>
+          <button
             className={`secondary ${showPreview ? 'active' : ''}`}
             onClick={() => setShowPreview(!showPreview)}
           >
@@ -270,6 +441,46 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
 
       {/* Main Editor Area */}
       <div className="editor-main">
+        {startMode === null ? (
+          <div className="creation-start-panel">
+            <div className="start-topic-card">
+              <h2>{topic.title}</h2>
+              {topic.description && <p>{topic.description}</p>}
+            </div>
+            <div className="start-options">
+              <button className="start-option-card" onClick={() => setStartMode('direct')}>
+                <h3>直接生成初稿</h3>
+                <p>基于当前选题和提示词，直接出一版初稿。</p>
+              </button>
+              <button className="start-option-card" onClick={() => setStartMode('chat')}>
+                <h3>先聊一聊再写</h3>
+                <p>先聊你的真实经历和想法，再生成更贴近你的稿子。</p>
+              </button>
+            </div>
+            <div className="start-note">
+              系统会自动使用你当前选题绑定的创作提示词。
+            </div>
+          </div>
+        ) : (
+          <>
+        {startMode === 'direct' && !content.trim() && (
+          <div className="direct-start-bar">
+            <textarea
+              value={draftIntent}
+              onChange={e => setDraftIntent(e.target.value)}
+              placeholder="可选：补充这篇文章的重点，比如想强调的经历、观点、语气..."
+              rows={3}
+            />
+            <div className="direct-start-actions">
+              <button className="secondary" onClick={() => setStartMode('chat')}>
+                改为先聊一聊
+              </button>
+              <button className="primary" onClick={handleGenerateDraftFromStart} disabled={isDraftGenerating}>
+                {isDraftGenerating ? '生成中...' : '生成初稿（先预览）'}
+              </button>
+            </div>
+          </div>
+        )}
         {/* Markdown Editor */}
         <div className={`editor-pane ${showPreview ? '' : 'full'}`}>
           <textarea
@@ -300,19 +511,23 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
           constitutions={constitutions}
           topic={topic}
           content={content}
-          onContentChange={setContent}
+          onProposeAiChange={handleProposeAiChange}
           selection={selection}
           selectionRange={selectionRange}
           onClearSelection={clearSelection}
           buildConstitutionPrompt={buildConstitutionPrompt}
+          defaultExpanded={startMode === 'chat'}
           initialChatHistory={topic.chatHistory || []}
           onChatHistoryChange={(history) => {
             onUpdateTopic({
               ...topic,
-              chatHistory: history
+              chatHistory: history,
+              aiEditHistory
             })
           }}
         />
+          </>
+        )}
 
         {/* 创作提示词面板 */}
         {showConstitutionPanel && (
@@ -481,6 +696,106 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
           display: flex;
           overflow: hidden;
           position: relative;
+        }
+
+        .creation-start-panel {
+          flex: 1;
+          padding: 28px;
+          overflow-y: auto;
+          background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+        }
+
+        .start-topic-card {
+          background: white;
+          border: 1px solid var(--border-color);
+          border-radius: 12px;
+          padding: 18px;
+          margin-bottom: 18px;
+        }
+
+        .start-topic-card h2 {
+          margin: 0;
+          font-size: 22px;
+        }
+
+        .start-topic-card p {
+          margin: 10px 0 0;
+          color: var(--text-secondary);
+          line-height: 1.6;
+        }
+
+        .start-options {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(260px, 1fr));
+          gap: 14px;
+        }
+
+        .start-option-card {
+          text-align: left;
+          background: white;
+          border: 1px solid var(--border-color);
+          border-radius: 12px;
+          padding: 16px;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .start-option-card:hover {
+          border-color: var(--primary-color);
+          box-shadow: 0 6px 20px rgba(37, 99, 235, 0.08);
+        }
+
+        .start-option-card h3 {
+          margin: 0 0 8px;
+          font-size: 18px;
+        }
+
+        .start-option-card p {
+          margin: 0;
+          color: var(--text-secondary);
+          line-height: 1.6;
+        }
+
+        .start-note {
+          margin-top: 12px;
+          color: var(--text-secondary);
+          font-size: 13px;
+        }
+
+        @media (max-width: 900px) {
+          .start-options {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        .direct-start-bar {
+          position: absolute;
+          left: 16px;
+          right: 16px;
+          top: 16px;
+          z-index: 11;
+          background: white;
+          border: 1px solid var(--border-color);
+          border-radius: 10px;
+          box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+          padding: 12px;
+        }
+
+        .direct-start-bar textarea {
+          width: 100%;
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          padding: 10px;
+          font-size: 14px;
+          resize: vertical;
+          font-family: inherit;
+        }
+
+        .direct-start-actions {
+          margin-top: 10px;
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
         }
 
         .editor-pane {
