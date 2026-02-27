@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Topic, Config, CreationConstitution } from '../App'
@@ -31,9 +31,16 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
   const [selectionRange, setSelectionRange] = useState<{ start: number, end: number } | null>(null)
   const [showPolishMenu, setShowPolishMenu] = useState(false)
   const [polishPosition, setPolishPosition] = useState({ x: 0, y: 0 })
+  const [isPolishing, setIsPolishing] = useState(false)
+  const [polishingType, setPolishingType] = useState<'rewrite' | 'formal' | 'casual' | 'fix' | null>(null)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [isInlineEditing, setIsInlineEditing] = useState(false)
+  const [showEditModeTip, setShowEditModeTip] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
+  const polishMenuRef = useRef<HTMLDivElement>(null)
+  const editModeTipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const previewClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const ignoreNextEditToggleClickRef = useRef(false)
 
   // 创作提示词相关状态
   const [selectedConstitutionId, setSelectedConstitutionId] = useState<string | null>(
@@ -58,6 +65,10 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
   useEffect(() => {
     if (!isInlineEditing || !editorRef.current) return
     const el = editorRef.current
+    // 进入编辑时同步一次文本，避免 React 重绘导致光标跳动
+    if (el.innerText !== content) {
+      el.innerText = content
+    }
     el.focus()
     const sel = window.getSelection()
     if (!sel) return
@@ -67,6 +78,17 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
     sel.removeAllRanges()
     sel.addRange(range)
   }, [isInlineEditing])
+
+  useEffect(() => {
+    return () => {
+      if (editModeTipTimerRef.current) {
+        clearTimeout(editModeTipTimerRef.current)
+      }
+      if (previewClickTimerRef.current) {
+        clearTimeout(previewClickTimerRef.current)
+      }
+    }
+  }, [])
 
   // 应用 AI 内容改动
   const applyAiContentChange = (nextContent: string) => {
@@ -203,8 +225,10 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
   }
 
   const handlePolish = async (type: 'rewrite' | 'formal' | 'casual' | 'fix') => {
-    if (!selection) return
+    if (!selection || isPolishing) return
     setShowPolishMenu(false)
+    setIsPolishing(true)
+    setPolishingType(type)
 
     const constitutionPrompt = buildConstitutionPrompt()
     const promptMap: Record<string, string> = {
@@ -232,6 +256,9 @@ function Editor({ topic, onUpdateTopic, onBack, config, constitutions }: EditorP
       }
     } catch (error) {
       alert('润色失败')
+    } finally {
+      setIsPolishing(false)
+      setPolishingType(null)
     }
   }
 
@@ -309,6 +336,57 @@ ${extraIntent}
     setIsDraftGenerating(false)
   }
 
+  const enterInlineEditing = () => {
+    setShowPolishMenu(false)
+    setShowEditModeTip(false)
+    setIsInlineEditing(true)
+  }
+
+  const exitInlineEditing = () => {
+    setShowPolishMenu(false)
+    setIsInlineEditing(false)
+  }
+
+  const handleEditorBlur = (event: React.FocusEvent<HTMLDivElement>) => {
+    const nextFocusTarget = event.relatedTarget as Node | null
+    if (nextFocusTarget && polishMenuRef.current?.contains(nextFocusTarget)) {
+      return
+    }
+    exitInlineEditing()
+  }
+
+  const showPreviewClickTip = () => {
+    setShowEditModeTip(true)
+    if (editModeTipTimerRef.current) {
+      clearTimeout(editModeTipTimerRef.current)
+    }
+    editModeTipTimerRef.current = setTimeout(() => {
+      setShowEditModeTip(false)
+    }, 2200)
+  }
+
+  const clearPreviewClickTimer = () => {
+    if (previewClickTimerRef.current) {
+      clearTimeout(previewClickTimerRef.current)
+      previewClickTimerRef.current = null
+    }
+  }
+
+  const handlePreviewClick = () => {
+    setShowPolishMenu(false)
+    // 单击延迟提示，避免双击时先弹提示再进入编辑造成闪动
+    clearPreviewClickTimer()
+    previewClickTimerRef.current = setTimeout(() => {
+      showPreviewClickTip()
+      previewClickTimerRef.current = null
+    }, 220)
+  }
+
+  const handlePreviewDoubleClick = () => {
+    clearPreviewClickTimer()
+    enterInlineEditing()
+  }
+
   return (
     <div className="editor-container">
       {/* Header */}
@@ -318,6 +396,27 @@ ${extraIntent}
           <span className="header-title">{topic.title}</span>
         </div>
         <div className="header-right">
+          {startMode !== null && (
+            <button
+              className={isInlineEditing ? 'secondary' : 'primary'}
+              onMouseDown={(e) => {
+                if (!isInlineEditing) return
+                // 防止 contenteditable 先 blur 再触发 click 反向切回编辑模式
+                e.preventDefault()
+                ignoreNextEditToggleClickRef.current = true
+                exitInlineEditing()
+              }}
+              onClick={() => {
+                if (ignoreNextEditToggleClickRef.current) {
+                  ignoreNextEditToggleClickRef.current = false
+                  return
+                }
+                isInlineEditing ? exitInlineEditing() : enterInlineEditing()
+              }}
+            >
+              {isInlineEditing ? '完成编辑' : '开始编辑'}
+            </button>
+          )}
           {constitutions.length > 0 && (
             <button
               className={`constitution-badge ${selectedConstitution ? 'active' : ''}`}
@@ -398,37 +497,38 @@ ${extraIntent}
         {/* Markdown Editor */}
         {/* Single Surface Editor */}
         <div className="editor-pane">
+          {!isInlineEditing && (
+            <div className="preview-mode-badge">预览模式</div>
+          )}
+          {showEditModeTip && (
+            <div className="preview-mode-tip">
+              当前是预览模式。点击上方“开始编辑”或双击正文即可修改
+            </div>
+          )}
           {isInlineEditing ? (
             <div
               ref={editorRef}
               className="editor-editable"
               contentEditable
               suppressContentEditableWarning
-              onInput={e => setContent(e.currentTarget.innerText)}
+              onInput={e => setContent(e.currentTarget.textContent || '')}
               onMouseUp={handleTextSelect}
               onKeyUp={handleTextSelect}
-              onBlur={() => {
-                setIsInlineEditing(false)
-                setShowPolishMenu(false)
-              }}
+              onBlur={handleEditorBlur}
               onPaste={e => {
                 e.preventDefault()
                 const text = e.clipboardData.getData('text/plain')
                 document.execCommand('insertText', false, text)
               }}
-            >
-              {content}
-            </div>
+            />
           ) : (
             <div
               className="editor-rendered markdown-preview"
-              onClick={() => {
-                setIsInlineEditing(true)
-                setShowPolishMenu(false)
-              }}
+              onClick={handlePreviewClick}
+              onDoubleClick={handlePreviewDoubleClick}
             >
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {content || '*点击开始写作...*'}
+                {content || '*预览模式：点击“开始编辑”或双击正文后即可写作*'}
               </ReactMarkdown>
             </div>
           )}
@@ -538,10 +638,27 @@ ${extraIntent}
       </div>
 
       {/* Polish Menu Popup */}
+      {isPolishing && (
+        <div
+          className="polish-loading"
+          style={{ left: polishPosition.x, top: polishPosition.y }}
+        >
+          正在{
+            polishingType === 'formal' ? '调整正式语气' :
+              polishingType === 'casual' ? '调整轻松语气' :
+                polishingType === 'fix' ? '纠错' : '改写'
+          }...
+        </div>
+      )}
       {showPolishMenu && (
         <div
+          ref={polishMenuRef}
           className="polish-menu"
           style={{ left: polishPosition.x, top: polishPosition.y }}
+          onMouseDown={e => {
+            // 避免点菜单时编辑区先失焦，导致点击事件被吞
+            e.preventDefault()
+          }}
         >
           <button onClick={() => handlePolish('rewrite')}>改写</button>
           <button onClick={() => handlePolish('formal')}>正式语气</button>
@@ -749,11 +866,40 @@ ${extraIntent}
         }
 
         .editor-pane {
+          position: relative;
           flex: 1;
           display: flex;
           flex-direction: column;
           min-width: 0;
           min-height: 0;
+        }
+
+        .preview-mode-badge {
+          position: absolute;
+          top: 10px;
+          right: 14px;
+          z-index: 5;
+          font-size: 12px;
+          color: #334155;
+          background: #e2e8f0;
+          border-radius: 999px;
+          padding: 4px 10px;
+          pointer-events: none;
+        }
+
+        .preview-mode-tip {
+          position: absolute;
+          top: 14px;
+          left: 50%;
+          transform: translateX(-50%);
+          z-index: 6;
+          background: rgba(15, 23, 42, 0.92);
+          color: white;
+          font-size: 13px;
+          padding: 8px 12px;
+          border-radius: 8px;
+          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
+          pointer-events: none;
         }
 
         .editor-editable,
@@ -774,8 +920,18 @@ ${extraIntent}
           outline: none;
         }
 
+        .editor-editable::selection {
+          background: #fde68a;
+          color: #111827;
+        }
+
         .editor-rendered {
-          cursor: text;
+          cursor: default;
+        }
+
+        .editor-rendered::selection {
+          background: #fde68a;
+          color: #111827;
         }
 
         .markdown-preview {
@@ -808,6 +964,19 @@ ${extraIntent}
         }
 
 
+
+        .polish-loading {
+          position: fixed;
+          transform: translateX(-50%) translateY(-100%);
+          background: rgba(15, 23, 42, 0.92);
+          color: #fff;
+          border-radius: 8px;
+          padding: 8px 12px;
+          font-size: 12px;
+          box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2);
+          z-index: 101;
+          pointer-events: none;
+        }
 
         .polish-menu {
           position: fixed;
