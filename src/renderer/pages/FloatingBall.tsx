@@ -132,10 +132,6 @@ function FloatingBall({
 
   // ========== 生成初稿 ==========
   const handleGenerateDraft = async () => {
-    if (messages.length === 0) {
-      alert('请先和 AI 助手讨论文章需求')
-      return
-    }
     setIsLoading(true)
 
     const constitutionPrompt = buildConstitutionPrompt()

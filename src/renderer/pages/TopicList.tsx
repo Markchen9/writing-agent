@@ -229,6 +229,22 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false)
   const [selectedTopics, setSelectedTopics] = useState<{ title: string; description: string }[]>([])
+  const [showTemplateMenu, setShowTemplateMenu] = useState(false)
+
+  // 选题生成引导模板
+  const promptTemplates = [
+    { label: '围绕主题生成', template: '帮我围绕 "{topic}" 生成 3 个有吸引力的选题' },
+    { label: '针对读者生成', template: '我的读者是 {audience}，帮我想 3 个他们关心的话题' },
+    { label: '热点话题', template: '帮我围绕 "{topic}" 的最新趋势和热点，生成 3 个选题' },
+    { label: '教程类', template: '帮我想 3 个关于 "{topic}" 的教程类选题，适合初学者' },
+    { label: '问题解答', template: '帮我想 3 个关于 "{topic}" 的常见问题及解答类选题' },
+  ]
+
+  // 选择模板
+  const handleSelectTemplate = (template: string) => {
+    setGenerateTopic(template)
+    setShowTemplateMenu(false)
+  }
   const [isKanbanView, setIsKanbanView] = useState(() => {
     const saved = localStorage.getItem('kanbanView')
     return saved ? JSON.parse(saved) : false
@@ -643,13 +659,37 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
         <div className="sidebar-section">
           <h3>AI 生成选题</h3>
           <div className="generate-input">
-            <input
-              type="text"
-              placeholder="输入主题..."
-              value={generateTopic}
-              onChange={e => setGenerateTopic(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleGenerateTopics()}
-            />
+            <div className="input-with-template">
+              <input
+                type="text"
+                placeholder="输入主题..."
+                value={generateTopic}
+                onChange={e => setGenerateTopic(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleGenerateTopics()}
+              />
+              {/* 模板按钮 */}
+              <div className="template-dropdown">
+                <button
+                  className="template-btn"
+                  onClick={() => setShowTemplateMenu(!showTemplateMenu)}
+                  title="提示模板"
+                >
+                  💡
+                </button>
+                {showTemplateMenu && (
+                  <div className="template-menu">
+                    {promptTemplates.map((t, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleSelectTemplate(t.template)}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
             <button
               className="secondary"
               onClick={handleGenerateTopics}
@@ -894,12 +934,80 @@ function TopicList({ topics, onSelectTopic, onSaveTopics }: TopicListProps) {
 
         .generate-input {
           display: flex;
-          flex-direction: column;
           gap: 8px;
+          align-items: flex-start;
         }
 
         .generate-input input {
+          flex: 1;
+        }
+
+        /* 模板输入框容器 */
+        .input-with-template {
+          display: flex;
+          flex: 1;
+          position: relative;
+        }
+
+        .input-with-template input {
+          flex: 1;
+          border-radius: 6px 0 0 6px;
+        }
+
+        /* 模板下拉按钮 */
+        .template-dropdown {
+          position: relative;
+        }
+
+        .template-btn {
+          height: 40px;
+          padding: 0 12px;
+          border: 1px solid var(--border-color);
+          border-left: none;
+          background: var(--sidebar-bg);
+          border-radius: 0 6px 6px 0;
+          cursor: pointer;
+          font-size: 16px;
+        }
+
+        .template-btn:hover {
+          background: var(--border-color);
+        }
+
+        /* 模板菜单 */
+        .template-menu {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          background: white;
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+          z-index: 100;
+          margin-top: 4px;
+        }
+
+        .template-menu button {
+          display: block;
           width: 100%;
+          padding: 10px 12px;
+          text-align: left;
+          background: none;
+          border: none;
+          cursor: pointer;
+          font-size: 13px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .template-menu button:hover {
+          background: var(--sidebar-bg);
+        }
+
+        .template-menu button:not(:last-child) {
+          border-bottom: 1px solid var(--border-color);
         }
 
         .topic-list {
